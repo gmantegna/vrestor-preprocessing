@@ -228,7 +228,7 @@ generator.to_csv(os.path.join(path, "Inputs/new_generators_data.csv"),encoding='
 #vre_mid_list = vre_mid_list.sort_values(["technology", "region"], ascending = (True, True))
 vre_mid_list.to_csv(os.path.join(path, "Inputs/Vre_and_storage_data.csv"),encoding='utf-8',index=False)
 
-gen_var = gen_var.drop(gen_var.iloc[:,indices_mid[0]], axis = 1)
-gen_var = round(gen_var, 5)
-gen_var.to_csv(os.path.join(path, "Inputs/new_generators_variability.csv"),encoding='utf-8',index=False)
+#gen_var = gen_var.drop(gen_var.iloc[:,indices_mid[0]], axis = 1)
+#gen_var = round(gen_var, 5)
+#gen_var.to_csv(os.path.join(path, "Inputs/new_generators_variability.csv"),encoding='utf-8',index=False)
     
