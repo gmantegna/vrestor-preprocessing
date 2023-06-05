@@ -18,7 +18,7 @@ self_disch = 0.05
 eff_up = 0.95
 eff_down = 0.95
 etainverter=0.967
-c_rate = 0.25
+power_to_energy_ratio = 0.25
 
 # NREL 2021 Co-location study breakdown (see excel sheet for how these values were actually broken down)
 cur_pv_cost_per_mw_ac = 1309972
@@ -35,6 +35,7 @@ standalone_battery_gcc = 2560 #annuitized interconnection fee in 2022$
 #### get cost breakdown and store as "output" df
 
 generators_data = pd.read_csv(case_folder / "Generators_data.csv")
+generators_data["R_ID"] = generators_data.index + 1
 
 output = pd.DataFrame()
 
@@ -221,8 +222,8 @@ vrestor_data["Eff_Up_AC"] = eff_up
 vrestor_data["Eff_Down_AC"] = eff_down
 
 vrestor_data["EtaInverter"] = etainverter
-vrestor_data["C_Rate_DC"] = c_rate
-vrestor_data["C_Rate_AC"] = c_rate
+vrestor_data["Power_to_Energy_DC"] = power_to_energy_ratio
+vrestor_data["Power_to_Energy_AC"] = power_to_energy_ratio
 
 #### modify generators_data
 
