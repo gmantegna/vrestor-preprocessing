@@ -6,7 +6,7 @@ from pathlib import Path
 
 # parameters
 
-case_folder = Path("./sample_case_with_LDES")
+case_folder = Path("./case_1")
 fom_cost_allocation = {
     "pv":0.63,
     "gcc":0.1,
@@ -14,11 +14,25 @@ fom_cost_allocation = {
 }
 zero_out_storage_costs = True
 
-self_disch = 0.05
-eff_up = 0.95
-eff_down = 0.95
-etainverter=0.967
-power_to_energy_ratio = 0.25
+storage_type = "LDES" # LDES or Battery (NOTE: cost functionality only works for Battery)
+
+if storage_type == "LDES":
+    storage_tech_str = "MetalAir"
+    self_disch = 0
+    eff_up = 0.65
+    eff_down = 0.65
+    etainverter=0.967
+    power_to_energy_ratio = 1 / 200
+elif storage_type =="Battery":
+    storage_tech_str = "Battery"
+    self_disch = 0.05
+    eff_up = 0.95
+    eff_down = 0.95
+    etainverter=0.967
+    power_to_energy_ratio = 0.25
+else:
+    raise ValueError("not a valid storage type")
+
 
 # NREL 2021 Co-location study breakdown (see excel sheet for how these values were actually broken down)
 cur_pv_cost_per_mw_ac = 1309972
@@ -34,7 +48,10 @@ standalone_battery_gcc = 2560 #annuitized interconnection fee in 2022$
 
 #### get cost breakdown and store as "output" df
 
-generators_data = pd.read_csv(case_folder / "Generators_data.csv")
+if os.path.exists(case_folder / "Generators_data_before_vrestor.csv"):
+    generators_data = pd.read_csv(case_folder / "Generators_data_before_vrestor.csv")
+else:
+    generators_data = pd.read_csv(case_folder / "Generators_data.csv")
 generators_data["R_ID"] = generators_data.index + 1
 
 output = pd.DataFrame()
@@ -47,8 +64,8 @@ pv_cost_decrease_ratio = pv_capex_mw_future / cur_pv_cost_per_mw_ac
 pv_cost_per_mw_dc = cur_pv_cost_per_mw_dc * pv_cost_decrease_ratio # DC dropped values for year
 inverter_cost_per_mw_ac = cur_inverter_cost_per_mw_ac * pv_cost_decrease_ratio # DC dropped values for year
 
-storage_generators = generators_data[generators_data.technology.str.contains("Battery")].copy(deep=True)
-storage_capex_mwh_future = storage_generators.capex_mwh.iloc[0] + storage_generators.capex_mw.iloc[0]/4
+storage_generators = generators_data[generators_data.technology.str.contains(storage_tech_str)].copy(deep=True)
+storage_capex_mwh_future = storage_generators.capex_mwh.iloc[0] + storage_generators.capex_mw.iloc[0]/(1/power_to_energy_ratio)
 storage_cost_decrease_ratio = storage_capex_mwh_future / cur_storage_cost_per_mwh_ac # DC dropped values for year
 storage_cost_per_mwh_dc = cur_storage_cost_per_mwh_dc * storage_cost_decrease_ratio # DC dropped values for year
 
@@ -201,6 +218,22 @@ vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_wind","WIND"] = 1
 vrestor_data["STOR_DC_DISCHARGE"] = 1
 vrestor_data["STOR_DC_CHARGE"] = 1
 
+# transfer any active MinCap constraints to all VREStor resources. Currently sets the MinCapTag_MWh_x column to 1 and the regular mincap column to 0
+for mincap_column in vrestor_data.columns[vrestor_data.columns.str.contains("MinCap")]:
+    new_mincap_column_name = "MinCapTag_MWh" + mincap_column.split("_")[1]
+    regions_with_active_mincap = pd.unique(vrestor_data[vrestor_data[mincap_column]==1].region)
+    vrestor_data[new_mincap_column_name] = 0
+    vrestor_data.loc[vrestor_data.region.isin(regions_with_active_mincap),new_mincap_column_name] = 1
+    vrestor_data[mincap_column] = 0
+
+# transfer any active MaxCap constraints to all VREStor resources. Currently sets the MaxCapTag_MWh_x column to 1 and the regular maxcap column to 0
+for maxcap_column in vrestor_data.columns[vrestor_data.columns.str.contains("MaxCap")]:
+    new_maxcap_column_name = "MaxCapTag_MWh" + maxcap_column.split("_")[1]
+    regions_with_active_maxcap = pd.unique(vrestor_data[vrestor_data[maxcap_column]==1].region)
+    vrestor_data[new_maxcap_column_name] = 0
+    vrestor_data.loc[vrestor_data.region.isin(regions_with_active_maxcap),new_maxcap_column_name] = 1
+    vrestor_data[maxcap_column] = 0
+
 for col_name in ["STOR_AC_DISCHARGE","STOR_AC_CHARGE","Existing_Cap_Inverter_MW","Existing_Cap_Solar_MW","Existing_Cap_Wind_MW","Existing_Cap_Charge_DC_MW","Existing_Cap_Charge_AC_MW","Existing_Cap_Discharge_DC_MW","Existing_Cap_Discharge_AC_MW","Max_Cap_Inverter_MW","Min_Cap_Inverter_MW","Max_Cap_Charge_AC_MW","Min_Cap_Charge_AC_MW","Max_Cap_Discharge_AC_MW","Min_Cap_Discharge_AC_MW","Max_Cap_Charge_DC_MW","Min_Cap_Charge_DC_MW","Max_Cap_Discharge_DC_MW","Min_Cap_Discharge_DC_MW","Min_Cap_Solar_MW","Min_Cap_Wind_MW","Inv_Cost_Discharge_DC_per_MWyr","Inv_Cost_Charge_DC_per_MWyr","Inv_Cost_Discharge_AC_per_MWyr","Inv_Cost_Charge_AC_per_MWyr","Fixed_OM_Cost_Discharge_DC_per_MWyr","Fixed_OM_Cost_Charge_DC_per_MWyr","Fixed_OM_Cost_Discharge_AC_per_MWyr","Fixed_OM_Cost_Charge_AC_per_MWyr","Var_OM_Cost_per_MWh_Solar","Var_OM_Cost_per_MWh_Wind","Var_OM_Cost_per_MWh_Charge_AC","Var_OM_Cost_per_MWh_Discharge_AC"]:
     vrestor_data[col_name] = 0
 for col_name in ["Max_Cap_Inverter_MW","Min_Cap_Inverter_MW","Max_Cap_Charge_AC_MW","Min_Cap_Charge_AC_MW","Max_Cap_Discharge_AC_MW","Min_Cap_Discharge_AC_MW","Max_Cap_Charge_DC_MW","Min_Cap_Charge_DC_MW","Max_Cap_Discharge_DC_MW","Max_Cap_Solar_MW","Max_Cap_Wind_MW","Inverter_Ratio_Wind","Inverter_Ratio_Solar"]:
@@ -210,7 +243,7 @@ vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Max_Cap_Solar_MW"] = v
 vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_wind","Max_Cap_Wind_MW"] = vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_wind","Max_Cap_MW"]
 
 vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Var_OM_Cost_per_MWh_Solar"] = vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Var_OM_Cost_per_MWh"]
-vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Var_OM_Cost_per_MWh_Wind"] = vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_wind","Var_OM_Cost_per_MWh"]
+vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_wind","Var_OM_Cost_per_MWh_Wind"] = vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_wind","Var_OM_Cost_per_MWh"]
 
 vrestor_data["Var_OM_Cost_per_MWh_Charge_DC"] = 0.15
 vrestor_data["Var_OM_Cost_per_MWh_Discharge_DC"] = 0.15
@@ -225,6 +258,9 @@ vrestor_data["EtaInverter"] = etainverter
 vrestor_data["Power_to_Energy_DC"] = power_to_energy_ratio
 vrestor_data["Power_to_Energy_AC"] = power_to_energy_ratio
 
+if storage_type == "LDES":
+    vrestor_data["LDS"] = 1
+
 #### modify generators_data
 
 gendata_mod = generators_data.copy(deep=True)
@@ -233,9 +269,13 @@ vrestor_resources = vrestor_data.Resource
 # reset relevant columns
 for capres_column in gendata_mod.columns[gendata_mod.columns.str.contains("CapRes")]:
     gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),capres_column] = 0
+for mincap_column in gendata_mod.columns[gendata_mod.columns.str.contains("MinCap")]:
+    gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),mincap_column] = 0
+for maxcap_column in gendata_mod.columns[gendata_mod.columns.str.contains("MaxCap")]:
+    gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),maxcap_column] = 0
 for esr_column in gendata_mod.columns[gendata_mod.columns.str.contains("ESR")]:
     gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),esr_column] = 0
-for col_name in ["VRE","STOR","Var_OM_Cost_per_MWh","Var_OM_Cost_per_MWh_In","Eff_Up","Eff_Down","Min_Duration","Max_Duration","Ramp_Up_Percentage","Ramp_Dn_Percentage","Commit","Num_VRE_Bins"]:
+for col_name in ["VRE","STOR","Var_OM_Cost_per_MWh","Var_OM_Cost_per_MWh_In","Eff_Up","Eff_Down","Min_Duration","Max_Duration","Ramp_Up_Percentage","Ramp_Dn_Percentage","Commit","Num_VRE_Bins","LDS"]:
     gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),col_name] = 0
 gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),"Max_Cap_MW"] = -1
 gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),"Max_Cap_MWh"] = -1
