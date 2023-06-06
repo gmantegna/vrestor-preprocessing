@@ -22,14 +22,14 @@ if storage_type == "LDES":
     eff_up = 0.65
     eff_down = 0.65
     etainverter=0.967
-    power_to_energy_ratio = 1 / 200
+    power_to_energy_ratio = eff_up / 200
 elif storage_type =="Battery":
     storage_tech_str = "Battery"
     self_disch = 0.05
     eff_up = 0.95
     eff_down = 0.95
     etainverter=0.967
-    power_to_energy_ratio = 0.25
+    power_to_energy_ratio = eff_up / 4
 else:
     raise ValueError("not a valid storage type")
 
