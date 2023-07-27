@@ -45,14 +45,14 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         eff_up = 0.65
         eff_down = 0.65
         etainverter=0.967
-        power_to_energy_ratio = eff_up / 200
+        power_to_energy_ratio = 1 / 200
     elif storage_type =="Battery":
         storage_tech_str = "Battery"
         self_disch = 0.05
         eff_up = 0.95
         eff_down = 0.95
         etainverter=0.967
-        power_to_energy_ratio = eff_up / 4
+        power_to_energy_ratio = 1 / 4
     else:
         raise ValueError("not a valid storage type")
 
@@ -241,25 +241,25 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
     vrestor_data["STOR_DC_DISCHARGE"] = 1
     vrestor_data["STOR_DC_CHARGE"] = 1
 
-    if not colocated_on:
-        vrestor_data.loc[vrestor_data.Resource_Type != "standalone_storage","STOR_DC_DISCHARGE"] = 0
-        vrestor_data.loc[vrestor_data.Resource_Type != "standalone_storage","STOR_DC_CHARGE"] = 0
-
-    # transfer any active MinCap constraints to all VREStor resources. Currently sets the MinCapTag_MWh_x column to 1 and the regular mincap column to 0
+    # transfer any active MinCap constraints to all VREStor resources. Currently assumes that the MinCap constraints are being applied to storage only.
     for mincap_column in vrestor_data.columns[vrestor_data.columns.str.contains("MinCap")]:
-        new_mincap_column_name = "MinCapTag_MWh" + mincap_column.split("_")[1]
+        new_mincap_column_name = "MinCapTagStor" + "_" + mincap_column.split("_")[1]
         regions_with_active_mincap = pd.unique(vrestor_data[vrestor_data[mincap_column]==1].region)
         vrestor_data[new_mincap_column_name] = 0
         vrestor_data.loc[vrestor_data.region.isin(regions_with_active_mincap),new_mincap_column_name] = 1
         vrestor_data[mincap_column] = 0
+        vrestor_data["MinCapTagSolar" + "_" + mincap_column.split("_")[1]] = 0
+        vrestor_data["MinCapTagWind" + "_" + mincap_column.split("_")[1]] = 0
 
     # transfer any active MaxCap constraints to all VREStor resources. Currently sets the MaxCapTag_MWh_x column to 1 and the regular maxcap column to 0
     for maxcap_column in vrestor_data.columns[vrestor_data.columns.str.contains("MaxCap")]:
-        new_maxcap_column_name = "MaxCapTag_MWh" + maxcap_column.split("_")[1]
+        new_maxcap_column_name = "MaxCapTagStor" + "_" + maxcap_column.split("_")[1]
         regions_with_active_maxcap = pd.unique(vrestor_data[vrestor_data[maxcap_column]==1].region)
         vrestor_data[new_maxcap_column_name] = 0
         vrestor_data.loc[vrestor_data.region.isin(regions_with_active_maxcap),new_maxcap_column_name] = 1
         vrestor_data[maxcap_column] = 0
+        vrestor_data["MaxCapTagSolar" + "_" + maxcap_column.split("_")[1]] = 0
+        vrestor_data["MaxCapTagWind" + "_" + maxcap_column.split("_")[1]] = 0
 
     for col_name in ["STOR_AC_DISCHARGE","STOR_AC_CHARGE","Existing_Cap_Inverter_MW","Existing_Cap_Solar_MW","Existing_Cap_Wind_MW","Existing_Cap_Charge_DC_MW","Existing_Cap_Charge_AC_MW","Existing_Cap_Discharge_DC_MW","Existing_Cap_Discharge_AC_MW","Max_Cap_Inverter_MW","Min_Cap_Inverter_MW","Max_Cap_Charge_AC_MW","Min_Cap_Charge_AC_MW","Max_Cap_Discharge_AC_MW","Min_Cap_Discharge_AC_MW","Max_Cap_Charge_DC_MW","Min_Cap_Charge_DC_MW","Max_Cap_Discharge_DC_MW","Min_Cap_Discharge_DC_MW","Min_Cap_Solar_MW","Min_Cap_Wind_MW","Inv_Cost_Discharge_DC_per_MWyr","Inv_Cost_Charge_DC_per_MWyr","Inv_Cost_Discharge_AC_per_MWyr","Inv_Cost_Charge_AC_per_MWyr","Fixed_OM_Cost_Discharge_DC_per_MWyr","Fixed_OM_Cost_Charge_DC_per_MWyr","Fixed_OM_Cost_Discharge_AC_per_MWyr","Fixed_OM_Cost_Charge_AC_per_MWyr","Var_OM_Cost_per_MWh_Solar","Var_OM_Cost_per_MWh_Wind","Var_OM_Cost_per_MWh_Charge_AC","Var_OM_Cost_per_MWh_Discharge_AC"]:
         vrestor_data[col_name] = 0
@@ -285,8 +285,20 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
     vrestor_data["Power_to_Energy_DC"] = power_to_energy_ratio
     vrestor_data["Power_to_Energy_AC"] = power_to_energy_ratio
 
+    vrestor_data.rename(columns={"LDS":"LDS_VRE_STOR"},inplace=True)
+
     if storage_type == "LDES":
-        vrestor_data["LDS"] = 1
+        vrestor_data["LDS_VRE_STOR"] = 1
+
+    for capres_column in vrestor_data.columns[vrestor_data.columns.str.contains("CapRes")]:
+        components = capres_column.split("_")
+        new_name = components[0] + "VreStor" + "_" + components[1]
+        vrestor_data.rename(columns={capres_column:new_name},inplace=True)
+
+    if not colocated_on:
+        vrestor_data.loc[vrestor_data.Resource_Type != "standalone_storage","STOR_DC_DISCHARGE"] = 0
+        vrestor_data.loc[vrestor_data.Resource_Type != "standalone_storage","STOR_DC_CHARGE"] = 0
+        vrestor_data.loc[vrestor_data.Resource_Type != "standalone_storage","LDS_VRE_STOR"] = 0
 
     #### modify generators_data
 
@@ -303,7 +315,7 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),maxcap_column] = 0
     for esr_column in gendata_mod.columns[gendata_mod.columns.str.contains("ESR")]:
         gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),esr_column] = 0
-    for col_name in ["VRE","STOR","Var_OM_Cost_per_MWh","Var_OM_Cost_per_MWh_In","Eff_Up","Eff_Down","Min_Duration","Max_Duration","Ramp_Up_Percentage","Ramp_Dn_Percentage","Commit","Num_VRE_Bins","LDS"]:
+    for col_name in ["VRE","STOR","Var_OM_Cost_per_MWh","Var_OM_Cost_per_MWh_In","Eff_Up","Eff_Down","Min_Duration","Max_Duration","Ramp_Up_Percentage","Ramp_Dn_Percentage","Num_VRE_Bins","LDS"]:
         gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),col_name] = 0
     gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),"Max_Cap_MW"] = -1
     gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),"Max_Cap_MWh"] = -1
@@ -337,7 +349,7 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
     #### export results
 
     generators_data.to_csv(case_folder / "Generators_data_before_vrestor.csv",index=False)
-    vrestor_data.to_csv(case_folder / "Vre_and_storage_data.csv",index=False)
+    vrestor_data.to_csv(case_folder / "Vre_and_stor_data.csv",index=False)
     gendata_mod.to_csv(case_folder / "Generators_data.csv",index=False)
     variability_pv.to_csv(case_folder / "Vre_and_stor_solar_variability.csv",index=False)
     variability_wind.to_csv(case_folder / "Vre_and_stor_wind_variability.csv",index=False)
@@ -346,4 +358,4 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
 
 
 if __name__ == "__main__":
-    convert_case_to_vrestor(case_folder=Path("./case_1"), storage_type="LDES", colocated_on=False, zero_out_storage_costs=True)
+    convert_case_to_vrestor(case_folder=Path("/Users/gabemantegna/Library/CloudStorage/GoogleDrive-gm1710@princeton.edu/Shared drives/ZERO Lab/Projects_by_leader/Gabriel_Mantegna/LDES_2023/modeling/GenX_cases/3zone_5days_vrestorbranch_vrestorwithcolocation"), storage_type="LDES", colocated_on=True, zero_out_storage_costs=True)
