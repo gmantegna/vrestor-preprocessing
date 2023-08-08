@@ -5,7 +5,7 @@ path = os.getcwd()
 from pathlib import Path
 import pathlib
 
-def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, colocated_on: bool, zero_out_storage_costs: bool) -> None:
+def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, colocated_on: bool, zero_out_storage_costs: bool, itc_stor: bool) -> None:
     """ Function to convert a GenX case for use with the VREStor module. If colocated_on is set to
     True, then utility scale PV and onshore wind resources will be converted to VREStor resources,
     and given the option of adding colocated storage. If it is set to False, then these resources will
@@ -34,10 +34,22 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         None (case folder is modified in place)
     """
     fom_cost_allocation = {
-        "pv":0.63,
-        "gcc":0.1,
-        "inverter":0.27
+        "pv":0.87,
+        "inverter":0.13
+        "gcc":0
     }
+
+    pv_dc_ac_cost_ratio = 0.728
+    stor_dc_ac_cost_ratio = 0.945
+
+    # For IRA tax credits
+    if itc_stor==True:
+        stor_itc = 0.649
+    else:
+        stor_itc = 1
+
+    ### NEED TO CALCULATE OUTSIDE THIS SHEET: INVERTER AVERAGE COST OVER PLANNING PERIOD
+    inv_cost_capex = 132508
 
     if storage_type == "LDES":
         storage_tech_str = "MetalAir"
@@ -52,22 +64,9 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         eff_up = 0.95
         eff_down = 0.95
         etainverter=0.967
-        power_to_energy_ratio = 1 / 4
+        power_to_energy_ratio = 0.2375
     else:
         raise ValueError("not a valid storage type")
-
-
-    # NREL 2021 Co-location study breakdown (see excel sheet for how these values were actually broken down)
-    cur_pv_cost_per_mw_ac = 1309972
-    cur_storage_cost_per_mwh_ac = 424189
-
-    cur_pv_cost_per_mw_dc = 811187
-    cur_storage_cost_per_mwh_dc = 405377
-    cur_inverter_cost_per_mw_ac = 132508
-
-    standalone_battery_gcc = 2560 #annuitized interconnection fee in 2022$
-
-    ##############
 
     #### get cost breakdown and store as "output" df
 
@@ -82,31 +81,28 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
     # get DC costs based on difference between current cost and cost in generators_data
 
     pv_generators = generators_data[generators_data.technology.str.contains("UtilityPV")].copy(deep=True)
-    pv_capex_mw_future = pv_generators.capex_mw.iloc[0]
-    pv_cost_decrease_ratio = pv_capex_mw_future / cur_pv_cost_per_mw_ac
-    pv_cost_per_mw_dc = cur_pv_cost_per_mw_dc * pv_cost_decrease_ratio # DC dropped values for year
-    inverter_cost_per_mw_ac = cur_inverter_cost_per_mw_ac * pv_cost_decrease_ratio # DC dropped values for year
+    pv_inv_cost_ac = pv_generators.capex_mw
+    pv_inv_cost_dc = pv_inv_cost_ac * pv_dc_ac_cost_ratio # DC dropped values for year
 
     storage_generators = generators_data[generators_data.technology.str.contains(storage_tech_str)].copy(deep=True)
-    storage_capex_mwh_future = storage_generators.capex_mwh.iloc[0] + storage_generators.capex_mw.iloc[0]/(1/power_to_energy_ratio)
-    storage_cost_decrease_ratio = storage_capex_mwh_future / cur_storage_cost_per_mwh_ac # DC dropped values for year
-    storage_cost_per_mwh_dc = cur_storage_cost_per_mwh_dc * storage_cost_decrease_ratio # DC dropped values for year
+    storage_capex_mwh_ac = storage_generators.capex_mwh.iloc[0] + storage_generators.capex_mw.iloc[0]/(1/power_to_energy_ratio)
+    storage_capex_mwh_dc = storage_capex_mwh_ac * stor_dc_ac_cost_ratio
+    storage_capex_mwh_dc_itc = storage_capex_mwh_dc * stor_itc
+
 
     # make hybrid pv resources
 
     hybrid_pv = pv_generators[["region","Resource","technology"]].copy(deep=True)
     hybrid_pv.technology = "hybrid_pv"
-    storage_financial_parameters = storage_generators[["region","wacc_real","cap_recovery_years","regional_cost_multiplier","Fixed_OM_Cost_per_MWhyr"]].rename(columns={
+    storage_financial_parameters = storage_generators[["region","wacc_real","cap_recovery_years","regional_cost_multiplier"]].rename(columns={
         "wacc_real":"storage_wacc_real",
         "cap_recovery_years":"storage_cap_recovery_years",
-        "regional_cost_multiplier":"storage_regional_cost_multiplier",
-        "Fixed_OM_Cost_per_MWhyr":"storage_fom_per_mwh_yr",
+        "regional_cost_multiplier":"storage_regional_cost_multiplier"
     }) 
     index_before = pv_generators.index
     pv_generators = pd.merge(pv_generators,storage_financial_parameters,on="region")
     pv_generators.index = index_before
 
-    hybrid_pv["Inv_Cost_per_MWyr"] = pv_generators["interconnect_annuity"]
     crf = (
         np.exp(pv_generators.wacc_real*pv_generators.cap_recovery_years)
         *(np.exp(pv_generators.wacc_real)-1)
@@ -120,22 +116,24 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         np.exp(pv_generators.storage_wacc_real*pv_generators.storage_cap_recovery_years)-1
     )
 
-    hybrid_pv["Inv_Cost_Inverter_per_MWyr"] = inverter_cost_per_mw_ac * pv_generators["storage_regional_cost_multiplier"] * crf_storage
-    hybrid_pv["Inv_Cost_Solar_per_MWyr"] = pv_cost_per_mw_dc * pv_generators["regional_cost_multiplier"] * crf
+    hybrid_pv["Inv_Cost_per_MWyr"] = pv_generators["interconnect_annuity"]
+    hybrid_pv["Inv_Cost_Solar_per_MWyr"] = pv_inv_cost_dc * pv_generators["regional_cost_multiplier"] * crf
+    hybrid_pv["Inv_Cost_Inverter_per_MWyr"] = inv_cost_capex * pv_generators["storage_regional_cost_multiplier"] * crf_storage * stor_itc
     hybrid_pv["Inv_Cost_Wind_per_MWyr"] = 0
-
     if zero_out_storage_costs:
         hybrid_pv["Inv_Cost_per_MWhyr"] = 0
     else:
-        hybrid_pv["Inv_Cost_per_MWhyr"] = storage_cost_per_mwh_dc * pv_generators["storage_regional_cost_multiplier"] * crf_storage
+        hybrid_pv["Inv_Cost_per_MWhyr"] = storage_capex_mwh_dc_itc * pv_generators["storage_regional_cost_multiplier"] * crf_storage
+
+
     hybrid_pv["Fixed_OM_Cost_per_MWyr"] = pv_generators["Fixed_OM_Cost_per_MWyr"] * fom_cost_allocation["gcc"]
-    hybrid_pv["Fixed_OM_Inverter_Cost_per_MWyr"] = pv_generators["Fixed_OM_Cost_per_MWyr"] * fom_cost_allocation["inverter"]
     hybrid_pv["Fixed_OM_Solar_Cost_per_MWyr"] = pv_generators["Fixed_OM_Cost_per_MWyr"] * fom_cost_allocation["pv"]
+    hybrid_pv["Fixed_OM_Inverter_Cost_per_MWyr"] = pv_generators["Fixed_OM_Cost_per_MWyr"] * fom_cost_allocation["inverter"]
     hybrid_pv["Fixed_OM_Wind_Cost_per_MWyr"] = 0
     if zero_out_storage_costs:
         hybrid_pv["Fixed_OM_Cost_per_MWhyr"] = 0
     else:
-        hybrid_pv["Fixed_OM_Cost_per_MWhyr"] = pv_generators["storage_fom_per_mwh_yr"]
+        hybrid_pv["Fixed_OM_Cost_per_MWhyr"] = storage_capex_mwh_dc * 0.025
 
     output = pd.concat([output,hybrid_pv],axis=0)
 
@@ -144,23 +142,15 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
     wind_generators = generators_data[generators_data.technology.str.contains("LandbasedWind")].copy(deep=True)
     hybrid_wind = wind_generators[["region","Resource","technology"]].copy(deep=True)
     hybrid_wind.technology = "hybrid_wind"
-    storage_financial_parameters = storage_generators[["region","wacc_real","cap_recovery_years","regional_cost_multiplier","Fixed_OM_Cost_per_MWhyr"]].rename(columns={
+    storage_financial_parameters = storage_generators[["region","wacc_real","cap_recovery_years","regional_cost_multiplier"]].rename(columns={
         "wacc_real":"storage_wacc_real",
         "cap_recovery_years":"storage_cap_recovery_years",
-        "regional_cost_multiplier":"storage_regional_cost_multiplier",
-        "Fixed_OM_Cost_per_MWhyr":"storage_fom_per_mwh_yr",
+        "regional_cost_multiplier":"storage_regional_cost_multiplier"
     })
     index_before = wind_generators.index
     wind_generators = pd.merge(wind_generators,storage_financial_parameters,on="region")
     wind_generators.index = index_before
 
-    hybrid_wind["Inv_Cost_per_MWyr"] = wind_generators["interconnect_annuity"]
-    crf = (
-        np.exp(wind_generators.wacc_real*wind_generators.cap_recovery_years)
-        *(np.exp(wind_generators.wacc_real)-1)
-    )/(
-        np.exp(wind_generators.wacc_real*wind_generators.cap_recovery_years)-1
-    )
     crf_storage = (
         np.exp(wind_generators.storage_wacc_real*wind_generators.storage_cap_recovery_years)
         *(np.exp(wind_generators.storage_wacc_real)-1)
@@ -168,25 +158,23 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         np.exp(wind_generators.storage_wacc_real*wind_generators.storage_cap_recovery_years)-1
     )
 
-    hybrid_wind["Inv_Cost_Inverter_per_MWyr"] = inverter_cost_per_mw_ac * wind_generators["storage_regional_cost_multiplier"] * crf_storage
-    hybrid_wind["Inv_Cost_Solar_per_MWyr"] = 0
+    hybrid_wind["Inv_Cost_per_MWyr"] = wind_generators["interconnect_annuity"]
     hybrid_wind["Inv_Cost_Wind_per_MWyr"] = wind_generators["Inv_Cost_per_MWyr"] - wind_generators["interconnect_annuity"]
+    hybrid_wind["Inv_Cost_Inverter_per_MWyr"] = inv_cost_capex * wind_generators["storage_regional_cost_multiplier"] * crf_storage * stor_itc
+    hybrid_wind["Inv_Cost_Solar_per_MWyr"] = 0
     if zero_out_storage_costs:
         hybrid_wind["Inv_Cost_per_MWhyr"] = 0
     else:
-        hybrid_wind["Inv_Cost_per_MWhyr"] = storage_cost_per_mwh_dc * wind_generators["storage_regional_cost_multiplier"] * crf_storage
+        hybrid_wind["Inv_Cost_per_MWhyr"] = storage_capex_mwh_dc_itc * wind_generators["storage_regional_cost_multiplier"] * crf_storage
 
-
-    ## NOTE: currently assuming FOM for GCC and inverter for hybrid wind are the same as for hybrid pv.
     hybrid_wind["Fixed_OM_Cost_per_MWyr"] = hybrid_pv["Fixed_OM_Cost_per_MWyr"].iloc[0]
     hybrid_wind["Fixed_OM_Inverter_Cost_per_MWyr"] = hybrid_pv["Fixed_OM_Inverter_Cost_per_MWyr"].iloc[0]
     hybrid_wind["Fixed_OM_Solar_Cost_per_MWyr"] = 0
     hybrid_wind["Fixed_OM_Wind_Cost_per_MWyr"] = wind_generators["Fixed_OM_Cost_per_MWyr"] - hybrid_pv["Fixed_OM_Cost_per_MWyr"].iloc[0]
-
     if zero_out_storage_costs:
         hybrid_wind["Fixed_OM_Cost_per_MWhyr"] = 0
     else:
-        hybrid_wind["Fixed_OM_Cost_per_MWhyr"] = wind_generators["storage_fom_per_mwh_yr"]
+        hybrid_wind["Fixed_OM_Cost_per_MWhyr"] = storage_capex_mwh_dc * 0.025
 
     output = pd.concat([output,hybrid_wind],axis=0)
 
@@ -201,26 +189,23 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         np.exp(storage_generators.wacc_real*storage_generators.cap_recovery_years)-1
     )
 
-    standalone_storage["Inv_Cost_per_MWyr"] = standalone_battery_gcc
-    standalone_storage["Inv_Cost_Inverter_per_MWyr"] = inverter_cost_per_mw_ac * storage_generators["regional_cost_multiplier"] * crf
+    standalone_storage["Inv_Cost_per_MWyr"] = storage_generators["spur_inv_mwyr"]
+    standalone_storage["Inv_Cost_Inverter_per_MWyr"] = inv_cost_capex * storage_generators["regional_cost_multiplier"] * crf * stor_itc
     standalone_storage["Inv_Cost_Solar_per_MWyr"] = 0
     standalone_storage["Inv_Cost_Wind_per_MWyr"] = 0
-
     if zero_out_storage_costs:
         standalone_storage["Inv_Cost_per_MWhyr"] = 0
     else:
-        standalone_storage["Inv_Cost_per_MWhyr"] = storage_cost_per_mwh_dc * storage_generators["regional_cost_multiplier"] * crf
+        standalone_storage["Inv_Cost_per_MWhyr"] = storage_capex_mwh_dc_itc * storage_generators["regional_cost_multiplier"] * crf
 
-    # once again assuming FOM for GCC and inverter are same as for hybrid pv
     standalone_storage["Fixed_OM_Cost_per_MWyr"] = hybrid_pv["Fixed_OM_Cost_per_MWyr"].iloc[0]
     standalone_storage["Fixed_OM_Inverter_Cost_per_MWyr"] = hybrid_pv["Fixed_OM_Inverter_Cost_per_MWyr"].iloc[0]
     standalone_storage["Fixed_OM_Solar_Cost_per_MWyr"] = 0
     standalone_storage["Fixed_OM_Wind_Cost_per_MWyr"] = 0
-
     if zero_out_storage_costs:
         standalone_storage["Fixed_OM_Cost_per_MWhyr"] = 0
     else:
-        standalone_storage["Fixed_OM_Cost_per_MWhyr"] = storage_generators["Fixed_OM_Cost_per_MWhyr"]
+        standalone_storage["Fixed_OM_Cost_per_MWhyr"] = storage_capex_mwh_dc * 0.025
 
     cost_breakdown = pd.concat([output,standalone_storage],axis=0)
 
@@ -261,12 +246,18 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         vrestor_data["MaxCapTagSolar" + "_" + maxcap_column.split("_")[1]] = 0
         vrestor_data["MaxCapTagWind" + "_" + maxcap_column.split("_")[1]] = 0
 
-    for col_name in ["STOR_AC_DISCHARGE","STOR_AC_CHARGE","Existing_Cap_Inverter_MW","Existing_Cap_Solar_MW","Existing_Cap_Wind_MW","Existing_Cap_Charge_DC_MW","Existing_Cap_Charge_AC_MW","Existing_Cap_Discharge_DC_MW","Existing_Cap_Discharge_AC_MW","Max_Cap_Inverter_MW","Min_Cap_Inverter_MW","Max_Cap_Charge_AC_MW","Min_Cap_Charge_AC_MW","Max_Cap_Discharge_AC_MW","Min_Cap_Discharge_AC_MW","Max_Cap_Charge_DC_MW","Min_Cap_Charge_DC_MW","Max_Cap_Discharge_DC_MW","Min_Cap_Discharge_DC_MW","Min_Cap_Solar_MW","Min_Cap_Wind_MW","Inv_Cost_Discharge_DC_per_MWyr","Inv_Cost_Charge_DC_per_MWyr","Inv_Cost_Discharge_AC_per_MWyr","Inv_Cost_Charge_AC_per_MWyr","Fixed_OM_Cost_Discharge_DC_per_MWyr","Fixed_OM_Cost_Charge_DC_per_MWyr","Fixed_OM_Cost_Discharge_AC_per_MWyr","Fixed_OM_Cost_Charge_AC_per_MWyr","Var_OM_Cost_per_MWh_Solar","Var_OM_Cost_per_MWh_Wind","Var_OM_Cost_per_MWh_Charge_AC","Var_OM_Cost_per_MWh_Discharge_AC"]:
+    for col_name in ["STOR_AC_DISCHARGE","STOR_AC_CHARGE","Existing_Cap_Inverter_MW","Existing_Cap_Solar_MW","Existing_Cap_Wind_MW",
+                    "Existing_Cap_Charge_DC_MW","Existing_Cap_Charge_AC_MW","Existing_Cap_Discharge_DC_MW","Existing_Cap_Discharge_AC_MW",
+                    "Min_Cap_Inverter_MW","Min_Cap_Charge_AC_MW","Min_Cap_Discharge_AC_MW","Min_Cap_Charge_DC_MW","Min_Cap_Discharge_DC_MW","Min_Cap_Solar_MW","Min_Cap_Wind_MW",
+                    "Inv_Cost_Discharge_DC_per_MWyr","Inv_Cost_Charge_DC_per_MWyr","Inv_Cost_Discharge_AC_per_MWyr","Inv_Cost_Charge_AC_per_MWyr",
+                    "Fixed_OM_Cost_Discharge_DC_per_MWyr","Fixed_OM_Cost_Charge_DC_per_MWyr","Fixed_OM_Cost_Discharge_AC_per_MWyr","Fixed_OM_Cost_Charge_AC_per_MWyr",
+                    "Var_OM_Cost_per_MWh_Solar","Var_OM_Cost_per_MWh_Wind","Var_OM_Cost_per_MWh_Charge_AC","Var_OM_Cost_per_MWh_Discharge_AC"]:
         vrestor_data[col_name] = 0
-    for col_name in ["Max_Cap_Inverter_MW","Min_Cap_Inverter_MW","Max_Cap_Charge_AC_MW","Min_Cap_Charge_AC_MW","Max_Cap_Discharge_AC_MW","Min_Cap_Discharge_AC_MW","Max_Cap_Charge_DC_MW","Min_Cap_Charge_DC_MW","Max_Cap_Discharge_DC_MW","Max_Cap_Solar_MW","Max_Cap_Wind_MW","Inverter_Ratio_Wind","Inverter_Ratio_Solar"]:
+    for col_name in ["Max_Cap_Inverter_MW","Max_Cap_Charge_AC_MW","Max_Cap_Discharge_AC_MW","Max_Cap_Charge_DC_MW","Max_Cap_Discharge_DC_MW",
+                    "Max_Cap_Solar_MW","Max_Cap_Wind_MW","Inverter_Ratio_Wind","Inverter_Ratio_Solar"]:
         vrestor_data[col_name] = -1
 
-    vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Max_Cap_Solar_MW"] = vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Max_Cap_MW"]
+    vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Max_Cap_Solar_MW"] = vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Max_Cap_MW"] * 1.3
     vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_wind","Max_Cap_Wind_MW"] = vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_wind","Max_Cap_MW"]
 
     vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Var_OM_Cost_per_MWh_Solar"] = vrestor_data.loc[vrestor_data.Resource_Type=="hybrid_pv","Var_OM_Cost_per_MWh"]
@@ -293,7 +284,13 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
     for capres_column in vrestor_data.columns[vrestor_data.columns.str.contains("CapRes")]:
         components = capres_column.split("_")
         new_name = components[0] + "VreStor" + "_" + components[1]
+        vrestor_data[capres_column] = vrestor_data[capres_column] * (0.95/0.8)
         vrestor_data.rename(columns={capres_column:new_name},inplace=True)
+
+    for esr_column in vrestor_data.columns[vrestor_data.columns.str.contains("ESR")]:
+        components = esr_column.split("_")
+        new_name = components[0] + "VreStor" + "_" + components[1]
+        vrestor_data.rename(columns={esr_column:new_name},inplace=True)
 
     if not colocated_on:
         vrestor_data.loc[vrestor_data.Resource_Type != "standalone_storage","STOR_DC_DISCHARGE"] = 0
@@ -304,6 +301,7 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
 
     gendata_mod = generators_data.copy(deep=True)
     vrestor_resources = vrestor_data.Resource
+    print(vrestor_resources)
     pv_and_wind_vrestor_resources = vrestor_data.Resource[vrestor_data.Resource_Type != "standalone_storage"]
 
     # reset relevant columns
@@ -315,8 +313,10 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
         gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),maxcap_column] = 0
     for esr_column in gendata_mod.columns[gendata_mod.columns.str.contains("ESR")]:
         gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),esr_column] = 0
-    for col_name in ["VRE","STOR","Var_OM_Cost_per_MWh","Var_OM_Cost_per_MWh_In","Eff_Up","Eff_Down","Min_Duration","Max_Duration","Ramp_Up_Percentage","Ramp_Dn_Percentage","Num_VRE_Bins","LDS"]:
+    for col_name in ["VRE","STOR","Var_OM_Cost_per_MWh_In","Eff_Up","Eff_Down","Min_Duration","Max_Duration","Ramp_Up_Percentage","Ramp_Dn_Percentage","Num_VRE_Bins","LDS"]:
         gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),col_name] = 0
+    for col_name in ["Var_OM_Cost_per_MWh"]:
+        gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),col_name] = 0.15
     gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),"Max_Cap_MW"] = -1
     gendata_mod.loc[gendata_mod.Resource.isin(vrestor_resources),"Max_Cap_MWh"] = -1
     if not colocated_on:
@@ -348,6 +348,10 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
 
     #### export results
 
+    vrestor_data = vrestor_data.drop(columns=["Num_VRE_Bins", "VRE", "THERM", "MUST_RUN", "STOR", "FLEX", "HYDRO", "VRE_STOR", "Min_Share", "Max_Share", "Existing_Cap_MWh", "Existing_Cap_MW", "Existing_Charge_Cap_MW", "num_units", "unmodified_existing_cap_mw", "New_Build", "Cap_Size", "Min_Cap_MW", "Max_Cap_MW", "Max_Cap_MWh", "Min_Cap_MWh", "Max_Charge_Cap_MW", "Min_Charge_Cap_MW", "Min_Share_percent", "Max_Share_percent","capex_mw", "Inv_Cost_per_MWyr_x", "Inv_Cost_per_MWyr_y", "Fixed_OM_Cost_per_MWyr_x", "Fixed_OM_Cost_per_MWyr_y", "capex_mwh", "Inv_Cost_per_MWhyr_x", "Inv_Cost_per_MWhyr_y", "Fixed_OM_Cost_per_MWhyr_x", "Fixed_OM_Cost_per_MWhyr_y","Var_OM_Cost_per_MWh", "Var_OM_Cost_per_MWh_In", "Inv_Cost_Charge_per_MWyr", "Fixed_OM_Cost_Charge_per_MWyr","Start_Cost_per_MW", "Start_Fuel_MMBTU_per_MW", "Heat_Rate_MMBTU_per_MWh", "heat_rate_mmbtu_mwh_iqr", "heat_rate_mmbtu_mwh_std", "Fuel", "Min_Power", "Self_Disch", "Eff_Up", "Eff_Down", "Hydro_Energy_to_Power_Ratio","Ratio_power_to_energy", "Min_Duration", "Max_Duration", "Max_Flexible_Demand_Delay", "Max_Flexible_Demand_Advance", "Flexible_Demand_Energy_Eff", "Ramp_Up_Percentage", "Ramp_Dn_Percentage", "Up_Time", "Down_Time", "NACC_Eff", "NACC_Peak_to_Base", "Reg_Max", "Rsv_Max", "Reg_Cost", "Rsv_Cost", "spur_miles", "spur_capex", "offshore_spur_miles", "offshore_spur_capex", "tx_miles","tx_capex", "interconnect_annuity", "spur_inv_mwyr", "regional_cost_multiplier", "wacc_real", "investment_years", "lcoe", "cap_recovery_years", "cpa_id", "Commit", "Hydro_level"])
+    vrestor_data = vrestor_data.round({'Inv_Cost_Solar_per_MWyr': 0, 'Inv_Cost_Wind_per_MWyr': 0, 'Inv_Cost_Inverter_per_MWyr': 0,'Fixed_OM_Solar_Cost_per_MWyr':0, 'Fixed_OM_Wind_Cost_per_MWyr': 0, 'Fixed_OM_Inverter_Cost_per_MWyr':0})
+    gendata_mod = gendata_mod.round({'Inv_Cost_per_MWyr': 0, 'Inv_Cost_per_MWhyr': 0, 'Fixed_OM_Cost_per_MWyr':0, 'Fixed_OM_Cost_per_MWhyr': 0})
+
     generators_data.to_csv(case_folder / "Generators_data_before_vrestor.csv",index=False)
     vrestor_data.to_csv(case_folder / "Vre_and_stor_data.csv",index=False)
     gendata_mod.to_csv(case_folder / "Generators_data.csv",index=False)
@@ -358,4 +362,4 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
 
 
 if __name__ == "__main__":
-    convert_case_to_vrestor(case_folder=Path("/Users/gabemantegna/Library/CloudStorage/GoogleDrive-gm1710@princeton.edu/Shared drives/ZERO Lab/Projects_by_leader/Gabriel_Mantegna/LDES_2023/modeling/GenX_cases/3zone_5days_vrestorbranch_vrestorwithcolocation"), storage_type="LDES", colocated_on=True, zero_out_storage_costs=True)
+    convert_case_to_vrestor(case_folder=Path("/Users/gabemantegna/Library/CloudStorage/GoogleDrive-gm1710@princeton.edu/Shared drives/ZERO Lab/Projects_by_leader/Gabriel_Mantegna/LDES_2023/modeling/GenX_cases/3zone_5days_vrestorbranch_vrestorwithcolocation"), storage_type="LDES", colocated_on=True, zero_out_storage_costs=True, itc_stor=False)
