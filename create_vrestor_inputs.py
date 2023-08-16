@@ -35,7 +35,7 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
     """
     fom_cost_allocation = {
         "pv":0.87,
-        "inverter":0.13
+        "inverter":0.13,
         "gcc":0
     }
 
@@ -284,7 +284,7 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
     for capres_column in vrestor_data.columns[vrestor_data.columns.str.contains("CapRes")]:
         components = capres_column.split("_")
         new_name = components[0] + "VreStor" + "_" + components[1]
-        vrestor_data[capres_column] = vrestor_data[capres_column] * (0.95/0.8)
+        vrestor_data[capres_column] = 0.95 * ((vrestor_data[capres_column]>0)*1)
         vrestor_data.rename(columns={capres_column:new_name},inplace=True)
 
     for esr_column in vrestor_data.columns[vrestor_data.columns.str.contains("ESR")]:
@@ -301,7 +301,6 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
 
     gendata_mod = generators_data.copy(deep=True)
     vrestor_resources = vrestor_data.Resource
-    print(vrestor_resources)
     pv_and_wind_vrestor_resources = vrestor_data.Resource[vrestor_data.Resource_Type != "standalone_storage"]
 
     # reset relevant columns
@@ -348,7 +347,7 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
 
     #### export results
 
-    vrestor_data = vrestor_data.drop(columns=["Num_VRE_Bins", "VRE", "THERM", "MUST_RUN", "STOR", "FLEX", "HYDRO", "VRE_STOR", "Min_Share", "Max_Share", "Existing_Cap_MWh", "Existing_Cap_MW", "Existing_Charge_Cap_MW", "num_units", "unmodified_existing_cap_mw", "New_Build", "Cap_Size", "Min_Cap_MW", "Max_Cap_MW", "Max_Cap_MWh", "Min_Cap_MWh", "Max_Charge_Cap_MW", "Min_Charge_Cap_MW", "Min_Share_percent", "Max_Share_percent","capex_mw", "Inv_Cost_per_MWyr_x", "Inv_Cost_per_MWyr_y", "Fixed_OM_Cost_per_MWyr_x", "Fixed_OM_Cost_per_MWyr_y", "capex_mwh", "Inv_Cost_per_MWhyr_x", "Inv_Cost_per_MWhyr_y", "Fixed_OM_Cost_per_MWhyr_x", "Fixed_OM_Cost_per_MWhyr_y","Var_OM_Cost_per_MWh", "Var_OM_Cost_per_MWh_In", "Inv_Cost_Charge_per_MWyr", "Fixed_OM_Cost_Charge_per_MWyr","Start_Cost_per_MW", "Start_Fuel_MMBTU_per_MW", "Heat_Rate_MMBTU_per_MWh", "heat_rate_mmbtu_mwh_iqr", "heat_rate_mmbtu_mwh_std", "Fuel", "Min_Power", "Self_Disch", "Eff_Up", "Eff_Down", "Hydro_Energy_to_Power_Ratio","Ratio_power_to_energy", "Min_Duration", "Max_Duration", "Max_Flexible_Demand_Delay", "Max_Flexible_Demand_Advance", "Flexible_Demand_Energy_Eff", "Ramp_Up_Percentage", "Ramp_Dn_Percentage", "Up_Time", "Down_Time", "NACC_Eff", "NACC_Peak_to_Base", "Reg_Max", "Rsv_Max", "Reg_Cost", "Rsv_Cost", "spur_miles", "spur_capex", "offshore_spur_miles", "offshore_spur_capex", "tx_miles","tx_capex", "interconnect_annuity", "spur_inv_mwyr", "regional_cost_multiplier", "wacc_real", "investment_years", "lcoe", "cap_recovery_years", "cpa_id", "Commit", "Hydro_level"])
+    vrestor_data = vrestor_data.drop(columns=["Num_VRE_Bins", "VRE", "THERM", "MUST_RUN", "STOR", "FLEX", "HYDRO", "Min_Share", "Max_Share", "Existing_Cap_MWh", "Existing_Cap_MW", "Existing_Charge_Cap_MW", "num_units", "unmodified_existing_cap_mw", "New_Build", "Cap_Size", "Min_Cap_MW", "Max_Cap_MW", "Max_Cap_MWh", "Min_Cap_MWh", "Max_Charge_Cap_MW", "Min_Charge_Cap_MW", "Min_Share_percent", "Max_Share_percent","capex_mw", "Inv_Cost_per_MWyr_x", "Inv_Cost_per_MWyr_y", "Fixed_OM_Cost_per_MWyr_x", "Fixed_OM_Cost_per_MWyr_y", "capex_mwh", "Inv_Cost_per_MWhyr_x", "Inv_Cost_per_MWhyr_y", "Fixed_OM_Cost_per_MWhyr_x", "Fixed_OM_Cost_per_MWhyr_y","Var_OM_Cost_per_MWh", "Var_OM_Cost_per_MWh_In", "Inv_Cost_Charge_per_MWyr", "Fixed_OM_Cost_Charge_per_MWyr","Start_Cost_per_MW", "Start_Fuel_MMBTU_per_MW", "Heat_Rate_MMBTU_per_MWh", "heat_rate_mmbtu_mwh_iqr", "heat_rate_mmbtu_mwh_std", "Fuel", "Min_Power", "Self_Disch", "Eff_Up", "Eff_Down", "Hydro_Energy_to_Power_Ratio","Min_Duration", "Max_Duration", "Max_Flexible_Demand_Delay", "Max_Flexible_Demand_Advance", "Flexible_Demand_Energy_Eff", "Ramp_Up_Percentage", "Ramp_Dn_Percentage", "Up_Time", "Down_Time","Reg_Max", "Rsv_Max", "Reg_Cost", "Rsv_Cost", "spur_miles", "spur_capex", "offshore_spur_miles", "offshore_spur_capex", "tx_miles","tx_capex", "interconnect_annuity", "spur_inv_mwyr", "regional_cost_multiplier", "wacc_real", "cap_recovery_years"])
     vrestor_data = vrestor_data.round({'Inv_Cost_Solar_per_MWyr': 0, 'Inv_Cost_Wind_per_MWyr': 0, 'Inv_Cost_Inverter_per_MWyr': 0,'Fixed_OM_Solar_Cost_per_MWyr':0, 'Fixed_OM_Wind_Cost_per_MWyr': 0, 'Fixed_OM_Inverter_Cost_per_MWyr':0})
     gendata_mod = gendata_mod.round({'Inv_Cost_per_MWyr': 0, 'Inv_Cost_per_MWhyr': 0, 'Fixed_OM_Cost_per_MWyr':0, 'Fixed_OM_Cost_per_MWhyr': 0})
 
@@ -362,4 +361,4 @@ def convert_case_to_vrestor(case_folder: pathlib.PurePath, storage_type: str, co
 
 
 if __name__ == "__main__":
-    convert_case_to_vrestor(case_folder=Path("/Users/gabemantegna/Library/CloudStorage/GoogleDrive-gm1710@princeton.edu/Shared drives/ZERO Lab/Projects_by_leader/Gabriel_Mantegna/LDES_2023/modeling/GenX_cases/3zone_5days_vrestorbranch_vrestorwithcolocation"), storage_type="LDES", colocated_on=True, zero_out_storage_costs=True, itc_stor=False)
+    convert_case_to_vrestor(case_folder=Path("/Users/gabrielmantegna/Library/CloudStorage/GoogleDrive-gm1710@princeton.edu/Shared drives/ZERO Lab/Projects_by_leader/Gabriel_Mantegna/LDES_2023/modeling/GenX_cases/capres/case6_uctest_vrestor"), storage_type="LDES", colocated_on=True, zero_out_storage_costs=True, itc_stor=False)
